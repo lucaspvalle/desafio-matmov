@@ -1,14 +1,15 @@
 from ortools.linear_solver import pywraplp
-from data import *
+import data
 import sqlite3
 
 solver = pywraplp.Solver.CreateSolver('CBC')
 cnx = sqlite3.connect("data.db")
 
-info = get_parametros(cnx)
-alunos = get_alunos(cnx, info)
-turmas = get_turmas(cnx, alunos, info)
 
+# Importando dados
+info = data.get_parametros(cnx)
+alunos = data.get_alunos(cnx, info)
+turmas = data.get_turmas(cnx, alunos, info)
 
 # 1) Variáveis de decisão
 # Abertura de turmas (prioriza turmas de 9 ano, isto é: serie_id = 2)
@@ -23,7 +24,6 @@ alunos = (alunos
 # Alunos x turma
 alunos["v_aluno"] = alunos.apply(lambda r: solver.BoolVar(f"aluno_{r.cluster}_{r.id}_{r.id_turma}"), axis=1)
 
-
 # 2) Restrições
 # Alunos matriculados devem ser alocados em uma turma
 (alunos
@@ -37,33 +37,33 @@ alunos["v_aluno"] = alunos.apply(lambda r: solver.BoolVar(f"aluno_{r.cluster}_{r
  .groupby('id')
  .apply(lambda r: solver.Add(solver.Sum(r['v_aluno']) <= 1, f"inscricao_{r.iloc[0].cluster}_{r.iloc[0].id}")))
 
-# Alunos de mesmas turma devem continuar juntos
-# (alunos
-#  .query('cluster > 0')
-#  .groupby(['cluster', 'id_turma'])
-#  .apply(lambda r: solver.Add(solver.Sum(r['v_aluno']) == r['id'].count() * r.iloc[0]['v_turma'],
-#                              f"mantem_juntos_{r.iloc[0].cluster}_{r.iloc[0].id_turma}")))
+# Alunos de mesma turma (cluster) devem continuar juntos
+v_agregados_em_cluster = (alunos
+                          .query('cluster > 0')
+                          .groupby(['cluster', 'id_turma'])
+                          .apply(lambda df: solver.Sum(df['v_aluno'])))
+(alunos
+ .merge(v_agregados_em_cluster.to_frame('v_cluster'), left_on=['cluster', 'id_turma'], right_index=True)
+ .apply(lambda r: solver.Add(r['v_cluster'] <= 1000 * r['v_aluno'], f"mantem_junto_{r.id}_{r.id_turma}"), axis=1))
 
 # A turma recebe alunos apenas se for aberta
 (alunos
  .groupby('id_turma')
- .apply(lambda r: solver.Add(solver.Sum(r['v_aluno']) <= 1000 * r.iloc[0]['v_turma'],
-                             f"turmas_abertas_{r.iloc[0].id_turma}")))
+ .apply(lambda r: solver.Add(solver.Sum(r['v_aluno']) <= 1000 * r.iloc[0]['v_turma'], f"abre_{r.iloc[0].id_turma}")))
 
 # Quantidade máxima de alunos por turma
 (alunos
  .groupby('id_turma')
- .apply(lambda r: solver.Add(solver.Sum(r['v_aluno']) <= info['qtd_max_alunos'],
-                             f"qtd_max_alunos_{r.iloc[0].id_turma}")))
+ .apply(lambda r: solver.Add(solver.Sum(r['v_aluno']) <= info['qtd_max_alunos'], f"max_alunos_{r.iloc[0].id_turma}")))
 
-# Prioriza ordem de inscrição (não está diferenciando alunos)
-# (alunos
-#  .query('data_inscricao.notnull()')
-#  .merge(alunos[['id', 'cluster', 'v_aluno']], left_on=['inscricao_anterior', 'cluster'],
-#         right_on=['id', 'cluster'], suffixes=['', '_anterior'])
-#  .groupby(['id', 'id_turma'])
-#  .apply(lambda r: solver.Add(solver.Sum(r['v_aluno']) <= 1000 * solver.Sum(r['v_aluno_anterior']),
-#                              f"prioridade_formulario_{r.iloc[0].id}_{r.iloc[0].id_turma}")))
+# Prioriza ordem de inscrição
+v_alunos_agregados_em_turmas = alunos.query('cluster == 0').groupby('id').apply(lambda df: solver.Sum(df['v_aluno']))
+(alunos
+ .query('cluster == 0')
+ .merge(v_alunos_agregados_em_turmas.to_frame('v_anterior_agregado'), left_on='inscricao_anterior', right_index=True)
+ .groupby('id')
+ .apply(lambda df: solver.Add(solver.Sum(df['v_aluno']) <= df.iloc[0]['v_anterior_agregado'],
+                              f"prioriza_{df.iloc[0].id}_{df.iloc[0].id_turma}")))
 
 # Modelo de custos da ONG
 CUSTO_PROFESSOR = (info['qtd_professores_pedagogico'] + info['qtd_professores_acd']) * info['custo_professor']  # noqa
@@ -74,15 +74,12 @@ solver.Add(solver.Sum(alunos['v_aluno']) * info['custo_aluno'] + solver.Sum(turm
 # 3) Função Objetivo
 turmas_vazias = (alunos
                  .groupby('id_turma')
-                 .apply(lambda r: info['qtd_max_alunos'] * r.iloc[0]['v_turma'] - solver.Sum(r['v_aluno'])))
+                 .apply(lambda df: info['qtd_max_alunos'] * df.iloc[0]['v_turma'] - solver.Sum(df['v_aluno'])))
 
 solver.Maximize(solver.Sum(alunos['v_aluno']) - solver.Sum(turmas_vazias))
 
 
 # 4) Execução
-# with open("modelo.txt", "w") as f:
-#     f.write(solver.ExportModelAsLpFormat(False))
-
 status = solver.Solve()
 
 if status == pywraplp.Solver.OPTIMAL or status == pywraplp.Solver.FEASIBLE:
@@ -92,12 +89,12 @@ if status == pywraplp.Solver.OPTIMAL or status == pywraplp.Solver.FEASIBLE:
     alunos['sol_alunos'] = alunos.apply(lambda r: r['v_aluno'].solution_value(), axis=1)
     turmas['sol_turmas'] = turmas.apply(lambda r: r['v_turma'].solution_value() if r['serie_id'] != 2 else 1, axis=1)
 
-    sol_aluno(cnx, alunos)
-    sol_priorizacao_formulario(cnx, alunos)
-    sol_turma(cnx, turmas, info)
+    data.sol_aluno(cnx, alunos)
+    data.sol_priorizacao_formulario(cnx, alunos)
+    data.sol_turma(cnx, turmas, info)
 
 else:
     print("Não há solução!")
-    truncate_tables(cnx)
+    data.truncate_tables(cnx)
 
 cnx.close()

@@ -32,17 +32,18 @@ def get_alunos(cnx, info):
 
     # Informação para manter alunos de mesma turma agrupados
     matriculados.rename(columns={"turma_id": "cluster"}, inplace=True)
-    formulario['cluster'] = 0
+    formulario['cluster'] = 0  # cluster 0, portanto, identifica alunos de formulário
 
     # Ordenando prioridades do formulário por data de inscrição
     formulario = (formulario
-                  .query('data_inscricao.notnull()')
+                  .query('cluster == 0')
                   .sort_values('data_inscricao')
-                  .assign(inscricao_anterior=lambda df: df['id'].shift(1)))
+                  .assign(inscricao_anterior=lambda df: df['id'].shift(1))
+                  .fillna(0).astype({'inscricao_anterior': int}))
 
     # Higienizando tabelas
     matriculados.drop(['id_turma', 'reprova', 'continua', 'serie_id'], axis=1, inplace=True)
-    formulario.drop(['serie_id', 'ano_referencia'], axis=1, inplace=True)
+    formulario.drop(['serie_id', 'ano_referencia', 'data_inscricao'], axis=1, inplace=True)
 
     # Juntando base de alunos
     alunos = pd.concat([matriculados, formulario])
@@ -63,7 +64,7 @@ def get_turmas(cnx, alunos: pd.DataFrame, info):
         demanda = alunos.groupby(['escola_id', 'nova_serie_id']).agg({'escola_id': 'max', 'nova_serie_id': 'max',
                                                                       'id': 'count'})
         # Calcular a demanda de turmas por escola e série
-        demanda['quebra'] = ceil(demanda['id'] / info['qtd_max_alunos']).astype('int64')
+        demanda['quebra'] = ceil(demanda['id'] / info['qtd_max_alunos']).astype(int)
 
         # Organizando as turmas necessárias
         turmas = pd.DataFrame([[row['escola_id'], row['nova_serie_id'], sala + 1]
@@ -89,11 +90,13 @@ def sol_aluno(cnx, alunos: pd.DataFrame):
 
 def sol_priorizacao_formulario(cnx, alunos: pd.DataFrame):
     info_alunos = pd.read_sql("SELECT * FROM formulario_inscricao", cnx)
+    info_alunos['data_inscricao'] = pd.to_datetime(info_alunos['data_inscricao'], dayfirst=True)
 
     (info_alunos
      .merge(alunos.query('(cluster == 0) & (sol_alunos == 1)')[['id', 'id_turma', 'serie_id']], on='id',
             suffixes=['_antigo', ''], how='left')
      .assign(status_id=None)
+     .sort_values('data_inscricao')
      .drop(['data_inscricao', 'ano_referencia', 'serie_id_antigo'], axis=1)
      .to_sql("sol_priorizacao_formulario", cnx, if_exists='replace', index=False))
 
