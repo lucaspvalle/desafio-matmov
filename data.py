@@ -65,7 +65,7 @@ def get_turmas(cnx, alunos: pd.DataFrame, info):
         demanda = alunos.groupby(['escola_id', 'nova_serie_id']).agg({'escola_id': 'max', 'nova_serie_id': 'max',
                                                                       'id': 'count'})
         # Calcular a demanda de turmas por escola e série
-        demanda['teste'] = ceil(demanda['id'] / info['qtd_max_alunos']).astype('int64')
+        demanda['quebra'] = ceil(demanda['id'] / info['qtd_max_alunos']).astype('int64')
 
         # Organizando as turmas necessárias
         turmas = pd.DataFrame([[row['escola_id'], row['nova_serie_id'], sala + 1]
