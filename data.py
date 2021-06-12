@@ -5,9 +5,7 @@ import pandas as pd
 def get_parametros(cnx):
     # Parâmetros do modelo definidos pelo usuário
     parametros = pd.read_sql("SELECT chave, valor FROM parametro", cnx)
-    parametros['valor'] = parametros['valor'].astype('int64')
-
-    return dict(zip(parametros['chave'], parametros['valor']))
+    return dict(zip(parametros['chave'], parametros['valor'].astype(int)))
 
 
 def get_alunos(cnx, info):
