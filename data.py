@@ -1,4 +1,4 @@
-from math import ceil
+from numpy import ceil
 import pandas as pd
 
 
@@ -24,12 +24,11 @@ def get_alunos(cnx, info):
                     .merge(turma, left_on='turma_id', right_on='id', suffixes=['', '_turma']))
 
     # Calculando nova série dos alunos (em caso de otimização para o próximo ano letivo)
-    matriculados['nova_serie_id'] = matriculados.apply(lambda r: (r['serie_id'] + (1 - r['reprova']) *
-                                                                  (1 - info['otimiza_dentro_do_ano'])), axis=1)
+    matriculados['nova_serie_id'] = (matriculados['serie_id'] + (1 - matriculados['reprova']) *
+                                     (1 - info['otimiza_dentro_do_ano']))
 
-    formulario['nova_serie_id'] = formulario.apply(lambda r: (r['serie_id'] + (info['ano_planejamento'] -
-                                                                               r['ano_referencia']) *
-                                                              (1 - info['otimiza_dentro_do_ano'])), axis=1)
+    formulario['nova_serie_id'] = (formulario['serie_id'] + (info['ano_planejamento'] - formulario['ano_referencia']) *
+                                   (1 - info['otimiza_dentro_do_ano']))
 
     formulario['data_inscricao'] = pd.to_datetime(formulario['data_inscricao'], dayfirst=True)
 
@@ -61,12 +60,12 @@ def get_alunos(cnx, info):
 
 def get_turmas(cnx, alunos: pd.DataFrame, info):
     # Se a ONG optar por abrir novas turmas,
-    if info['possibilita_abertura_novas_turmas']:  # TODO: adicionar % mínimo de alunos para abrir turma
+    if info['possibilita_abertura_novas_turmas']:
         # Calcular a demanda por escola e série
         demanda = alunos.groupby(['escola_id', 'nova_serie_id']).agg({'escola_id': 'max', 'nova_serie_id': 'max',
                                                                       'id': 'count'})
         # Calcular a demanda de turmas por escola e série
-        demanda['quebra'] = demanda.apply(lambda r: ceil(r['id'] / info['qtd_max_alunos']), axis=1)
+        demanda['teste'] = ceil(demanda['id'] / info['qtd_max_alunos']).astype('int64')
 
         # Organizando as turmas necessárias
         turmas = pd.DataFrame([[row['escola_id'], row['nova_serie_id'], sala + 1]
@@ -84,36 +83,43 @@ def get_turmas(cnx, alunos: pd.DataFrame, info):
 def sol_aluno(cnx, alunos: pd.DataFrame):
     info_alunos = pd.read_sql("SELECT * FROM aluno", cnx)
 
-    alunos = alunos.merge(info_alunos, how='left', on='id', suffixes=['', '_sql'])
-
-    (alunos.query('(cluster > 0) & (sol_alunos == 1)')
-     [['id', 'cpf', 'nome', 'email', 'telefone', 'nome_responsavel',
-       'telefone_responsavel', 'nome_escola_origem', 'id_turma']]
+    (info_alunos
+     .merge(alunos.query('(cluster > 0) & (sol_alunos == 1)')[['id', 'id_turma']], on='id', how='left')
+     .drop(['turma_id', 'reprova', 'continua'], axis=1)
      .to_sql("sol_aluno", cnx, if_exists='replace', index=False))
 
 
 def sol_priorizacao_formulario(cnx, alunos: pd.DataFrame):
     info_alunos = pd.read_sql("SELECT * FROM formulario_inscricao", cnx)
 
-    alunos = alunos.merge(info_alunos, how='left', on='id', suffixes=['', '_sql'])
-    alunos['status_id'] = None
-
-    (alunos.query('(cluster == 0) & (sol_alunos == 1)')
-     [['id', 'nome', 'cpf', 'email_aluno', 'telefone_aluno', 'nome_responsavel', 'telefone_responsavel',
-       'escola_id', 'serie_id', 'nome_escola_origem', 'id_turma', 'status_id']]
+    (info_alunos
+     .merge(alunos.query('(cluster == 0) & (sol_alunos == 1)')[['id', 'id_turma', 'serie_id']], on='id',
+            suffixes=['_antigo', ''], how='left')
+     .assign(status_id=None)
+     .drop(['data_inscricao', 'ano_referencia', 'serie_id_antigo'], axis=1)
      .to_sql("sol_priorizacao_formulario", cnx, if_exists='replace', index=False))
 
 
 def sol_turma(cnx, turmas: pd.DataFrame, info):
-    turmas['qtd_max_alunos'] = info['qtd_max_alunos']
-    turmas['qtd_professores_acd'] = info['qtd_professores_acd']
-    turmas['qtd_professores_pedagogico'] = info['qtd_professores_pedagogico']
-    turmas['aprova'] = None
-    turmas['nome'] = None
+    aux = {1: "A", 2: "B", 3: "C", 4: "D"}
 
-    (turmas.query('sol_turmas == 1')
-     [['id', 'nome', 'qtd_max_alunos', 'qtd_professores_acd',
-       'qtd_professores_pedagogico', 'escola_id', 'serie_id', 'aprova']]
+    regiao = pd.read_sql("SELECT * FROM regiao", cnx)
+    serie = pd.read_sql("SELECT id, nome FROM serie", cnx)
+    escola = pd.read_sql("SELECT * FROM escola", cnx)
+
+    turmas['nome'] = (turmas
+                      .merge(escola, left_on='escola_id', right_on='id', suffixes=['', '_escola'])
+                      .merge(serie, left_on='serie_id', right_on='id', suffixes=['', '_serie'])
+                      .merge(regiao, left_on='regiao_id', right_on='id', suffixes=['', '_regiao'])
+                      .apply(lambda df: df['nome_regiao'] + "_" + df['nome_serie'][0] + aux[df['sala']], axis=1))
+
+    (turmas
+     .query('sol_turmas == 1')
+     .assign(qtd_max_alunos=info['qtd_max_alunos'],
+             qtd_professores_acd=info['qtd_professores_acd'],
+             qtd_professores_pedagogico=info['qtd_professores_pedagogico'],
+             aprova=None)
+     .drop(['sala', 'id', 'v_turma', 'sol_turmas'], axis=1)
      .to_sql("sol_turma", cnx, if_exists='replace', index=False))
 
 
