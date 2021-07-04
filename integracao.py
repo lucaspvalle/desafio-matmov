@@ -179,7 +179,7 @@ def sol_turma(cnx: sqlite3.Connection, turmas: pd.DataFrame, info: dict):
      .to_sql("sol_turma", cnx, if_exists='replace', index=False))
 
 
-def truncate_tables(cnx):
+def truncate_tables(cnx: sqlite3.Connection):
     """
     Limpa as tabelas do banco de dados.
 

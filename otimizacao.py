@@ -70,7 +70,7 @@ def c_agrupa_colegas(alunos: pd.DataFrame):
     """
     Alunos já matriculados na ONG, que estudavam em uma mesma turma, devem continuar juntos
 
-    SUM(COLEGA, v_alunos(COLEGA, TURMA) <= M * v_alunos(ALUNO, TURMA)
+    SUM(COLEGA, v_alunos(COLEGA, TURMA)) <= M * v_alunos(ALUNO, TURMA)
 
     :param alunos: alunos já matriculados na ONG
     """
