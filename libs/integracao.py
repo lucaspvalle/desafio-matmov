@@ -37,13 +37,14 @@ def get_alunos(cnx: sqlite3.Connection, info: dict) -> pd.DataFrame:
                     .merge(turma, left_on='turma_id', right_on='id', suffixes=['', '_turma']))
 
     # Calculando nova série dos alunos (em caso de otimização para o próximo ano letivo)
-    matriculados['nova_serie_id'] = (matriculados['serie_id'] + (1 - matriculados['reprova']) *
+    matriculados['nova_serie_id'] = (matriculados['serie_id'].values + (1 - matriculados['reprova'].values) *
                                      (1 - info['otimiza_dentro_do_ano']))
 
-    formulario['nova_serie_id'] = (formulario['serie_id'] + (info['ano_planejamento'] - formulario['ano_referencia']) *
+    formulario['nova_serie_id'] = (formulario['serie_id'].values +
+                                   (info['ano_planejamento'] - formulario['ano_referencia'].values) *
                                    (1 - info['otimiza_dentro_do_ano']))
 
-    formulario['data_inscricao'] = pd.to_datetime(formulario['data_inscricao'], dayfirst=True)
+    formulario['data_inscricao'] = pd.to_datetime(formulario['data_inscricao'].values, dayfirst=True)
 
     # Informação para manter alunos de mesma turma agrupados
     matriculados.rename(columns={"turma_id": "cluster"}, inplace=True)
@@ -101,8 +102,9 @@ def get_turmas(cnx: sqlite3.Connection, alunos: pd.DataFrame, info: dict) -> pd.
 
         # Calcular a demanda de turmas por escola e série
         demanda['sala'] = (demanda
-                           .assign(quebra=ceil(demanda['id'] / info['qtd_max_alunos']))
-                           .apply(lambda r: list(range(1, int(r['quebra']) + 1)), axis=1))
+                           .assign(quebra=ceil(demanda['id'].values / info['qtd_max_alunos']))
+                           .astype({'quebra': int})
+                           .apply(lambda r: list(range(1, r['quebra'] + 1)), axis=1))
 
         # Abrindo a quantidade necessária de salas para atender a demanda
         demanda = demanda.explode('sala').reset_index()
@@ -112,7 +114,8 @@ def get_turmas(cnx: sqlite3.Connection, alunos: pd.DataFrame, info: dict) -> pd.
                            .merge(escola, left_on='escola_id', right_on='id', suffixes=['', '_escola'])
                            .merge(serie, left_on='nova_serie_id', right_on='id', suffixes=['', '_serie'])
                            .merge(regiao, left_on='regiao_id', right_on='id', suffixes=['', '_regiao'])
-                           .apply(lambda r: r['nome_regiao'] + "_" + r['nome_serie'][0] + aux[int(r['sala'])], axis=1))
+                           .astype({'sala': int})
+                           .apply(lambda r: r['nome_regiao'] + "_" + r['nome_serie'][0] + aux[r['sala']], axis=1))
 
         # Padronizando a tabela final
         turmas = demanda.drop(columns='sala').rename(columns={'nova_serie_id': 'serie_id'}).assign(id=demanda.index + 1)
