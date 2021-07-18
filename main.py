@@ -1,6 +1,6 @@
-import integracao
 import sqlite3
-from otimizacao import *
+from libs import integracao
+from libs.otimizacao import *
 
 
 def main():
