@@ -19,7 +19,9 @@ def v_alunos(alunos: pd.DataFrame, turmas: pd.DataFrame) -> pd.DataFrame:
                      right_on=["escola_id", "serie_id"], suffixes=["", "_turma"])
               .drop('nova_serie_id', axis=1))
 
-    alunos["v_aluno"] = alunos.apply(lambda r: solver.BoolVar(f"aluno_{r.cluster}_{r.id}_{r.id_turma}"), axis=1)
+    tipo = {True: "formulario", False: "matriculado"}
+    alunos["v_aluno"] = alunos.apply(lambda r: solver.BoolVar(f"{tipo[r.formulario]}_{r.id}_{r.id_turma}"), axis=1)
+
     return alunos
 
 
@@ -45,9 +47,9 @@ def c_alunos_matriculados(alunos: pd.DataFrame):
     """
 
     (alunos
-     .query('cluster > 0')
+     .query('~ formulario')
      .groupby('id')
-     .apply(lambda r: solver.Add(solver.Sum(r['v_aluno']) == 1, f"continua_{r.iloc[0].cluster}_{r.iloc[0].id}")))
+     .apply(lambda r: solver.Add(r['v_aluno'].values.sum() == 1, f"continua_{r.iloc[0].id}")))
 
 
 def c_alunos_de_formulario(alunos: pd.DataFrame):
@@ -60,9 +62,9 @@ def c_alunos_de_formulario(alunos: pd.DataFrame):
     """
 
     (alunos
-     .query('cluster == 0')
+     .query('formulario')
      .groupby('id')
-     .apply(lambda r: solver.Add(solver.Sum(r['v_aluno']) <= 1, f"inscricao_{r.iloc[0].cluster}_{r.iloc[0].id}")))
+     .apply(lambda r: solver.Add(r['v_aluno'].values.sum() <= 1, f"inscricao_{r.iloc[0].id}")))
 
 
 def c_agrupa_colegas(alunos: pd.DataFrame):
@@ -75,9 +77,9 @@ def c_agrupa_colegas(alunos: pd.DataFrame):
     """
 
     v_agregados_em_cluster = (alunos
-                              .query('cluster > 0')
+                              .query('~ formulario')
                               .groupby(['cluster', 'id_turma'])
-                              .apply(lambda df: solver.Sum(df['v_aluno'])))
+                              .apply(lambda df: df['v_aluno'].values.sum()))
     (alunos
      .merge(v_agregados_em_cluster.to_frame('v_cluster'), left_on=['cluster', 'id_turma'], right_index=True)
      .apply(lambda r: solver.Add(r['v_cluster'] <= big_M * r['v_aluno'], f"mantem_junto_{r.id}_{r.id_turma}"), axis=1))
@@ -94,7 +96,7 @@ def c_abertura_de_turmas(alunos: pd.DataFrame):
 
     (alunos
      .groupby('id_turma')
-     .apply(lambda r: solver.Add(solver.Sum(r['v_aluno']) <= big_M * r.iloc[0]['v_turma'],
+     .apply(lambda r: solver.Add(r['v_aluno'].values.sum() <= big_M * r.iloc[0]['v_turma'],
                                  f"abre_{r.iloc[0].id_turma}")))
 
 
@@ -110,7 +112,7 @@ def c_maximo_de_alunos_por_turma(info: dict, alunos: pd.DataFrame):
 
     (alunos
      .groupby('id_turma')
-     .apply(lambda r: solver.Add(solver.Sum(r['v_aluno']) <= info['qtd_max_alunos'],
+     .apply(lambda r: solver.Add(r['v_aluno'].values.sum() <= info['qtd_max_alunos'],
                                  f"max_alunos_{r.iloc[0].id_turma}")))
 
 
@@ -129,8 +131,8 @@ def c_custos(info: dict, alunos: pd.DataFrame, turmas: pd.DataFrame):
 
     custo_professor = (info['qtd_professores_pedagogico'] + info['qtd_professores_acd']) * info['custo_professor']
 
-    solver.Add(solver.Sum(alunos['v_aluno']) * info['custo_aluno'] + solver.Sum(turmas['v_turma']) * custo_professor <=
-               info['limite_custo'], f"limite_custos")
+    solver.Add(alunos['v_aluno'].values.sum() * info['custo_aluno']
+               + turmas['v_turma'].values.sum() * custo_professor <= info['limite_custo'], f"limite_custos")
 
 
 def funcao_objetivo(info: dict, alunos: pd.DataFrame, turmas: pd.DataFrame):
@@ -147,18 +149,18 @@ def funcao_objetivo(info: dict, alunos: pd.DataFrame, turmas: pd.DataFrame):
     """
 
     # Prioriza turmas de anos mais novos
-    max_serie_id = turmas['serie_id'].max() + 1
+    max_serie_id = turmas['serie_id'].values.max() + 1
     alunos['peso_serie'] = (max_serie_id - alunos['serie_id']) / (max_serie_id * 5)
 
     # Penaliza as vagas remanescentes quando uma turma é aberta
     penaliza_vagas_remanescentes = (alunos
                                     .groupby('id_turma')
                                     .apply(lambda df: info['qtd_max_alunos'] * df.iloc[0]['v_turma']
-                                           - solver.Sum(df['v_aluno'])))
+                                           - df['v_aluno'].values.sum()))
 
     # Função Objetivo
-    solver.Maximize((alunos['v_aluno'] * alunos['peso_inscricao'] * alunos['peso_serie']).sum()
-                    - penaliza_vagas_remanescentes.sum() * 0.01)
+    solver.Maximize((alunos['v_aluno'] * alunos['peso_inscricao'] * alunos['peso_serie']).values.sum()
+                    - penaliza_vagas_remanescentes.values.sum() * 0.01)
 
 
 def otimiza(alunos: pd.DataFrame, turmas: pd.DataFrame) -> (bool, pd.DataFrame, pd.DataFrame):
@@ -170,18 +172,15 @@ def otimiza(alunos: pd.DataFrame, turmas: pd.DataFrame) -> (bool, pd.DataFrame, 
     :return: status do resultado e as estruturas de dados
     """
 
-    status = solver.Solve()
+    status = (solver.Solve() == pywraplp.Solver.OPTIMAL or pywraplp.Solver.FEASIBLE)
 
-    if status == pywraplp.Solver.OPTIMAL or status == pywraplp.Solver.FEASIBLE:
-        factivel = True
-
+    if status:
         print("Alocação realizada com sucesso!\n")
-        print("Custo total: ", solver.Objective().Value(), "\n")
+        print("Objetivo: ", solver.Objective().Value())
 
-        alunos['sol_alunos'] = alunos.apply(lambda r: r['v_aluno'].solution_value(), axis=1)
-        turmas['sol_turmas'] = turmas.apply(lambda r: r['v_turma'].solution_value(), axis=1)
-
+        alunos['sol_alunos'] = alunos.apply(lambda r: r['v_aluno'].solution_value(), axis=1) == 1
+        turmas['sol_turmas'] = turmas.apply(lambda r: r['v_turma'].solution_value(), axis=1) == 1
     else:
-        factivel = False
+        print("Não há solução!")
 
-    return factivel, alunos, turmas
+    return status, alunos, turmas

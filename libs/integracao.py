@@ -47,17 +47,14 @@ def get_alunos(cnx: sqlite3.Connection, info: dict) -> pd.DataFrame:
     formulario['data_inscricao'] = pd.to_datetime(formulario['data_inscricao'].values, dayfirst=True)
     formulario['peso_inscricao'] = (formulario['data_inscricao'].rank(method='dense', ascending=False) /
                                     len(formulario))
+    matriculados['peso_inscricao'] = 1
 
     # Informação para manter alunos de mesma turma agrupados
     matriculados.rename(columns={"turma_id": "cluster"}, inplace=True)
-    matriculados['peso_inscricao'] = 1
-    formulario['cluster'] = 0  # cluster 0, portanto, identifica alunos de formulário
+    formulario['cluster'] = 0
 
-    # formulario = (formulario
-    #               .query('cluster == 0')
-    #               .sort_values('data_inscricao')
-    #               .assign(inscricao_anterior=lambda df: df['id'].shift(1))
-    #               .fillna(0).astype({'inscricao_anterior': int}))
+    formulario['formulario'] = True
+    matriculados['formulario'] = False
 
     # Higienizando tabelas
     matriculados.drop(['id_turma', 'reprova', 'continua', 'serie_id'], axis=1, inplace=True)
@@ -141,7 +138,7 @@ def sol_aluno(cnx: sqlite3.Connection, alunos: pd.DataFrame):
     info_alunos = pd.read_sql("SELECT * FROM aluno", cnx)
 
     (info_alunos
-     .merge(alunos.query('(cluster > 0) & (sol_alunos == 1)')[['id', 'id_turma']], on='id', how='inner')
+     .merge(alunos.query('(~ formulario) & (sol_alunos)')[['id', 'id_turma']], on='id', how='inner')
      .drop(['turma_id', 'reprova', 'continua'], axis=1)
      .to_sql("sol_aluno", cnx, if_exists='replace', index=False))
 
@@ -158,7 +155,7 @@ def sol_priorizacao_formulario(cnx: sqlite3.Connection, alunos: pd.DataFrame):
     info_alunos['data_inscricao'] = pd.to_datetime(info_alunos['data_inscricao'], dayfirst=True)
 
     (info_alunos
-     .merge(alunos.query('(cluster == 0) & (sol_alunos == 1)')[['id', 'id_turma', 'serie_id']], on='id',
+     .merge(alunos.query('(formulario) & (sol_alunos)')[['id', 'id_turma', 'serie_id']], on='id',
             suffixes=['_antigo', ''], how='inner')
      .assign(status_id=None)
      .sort_values('data_inscricao')
@@ -176,11 +173,12 @@ def sol_turma(cnx: sqlite3.Connection, turmas: pd.DataFrame, info: dict):
     """
 
     (turmas
-     .query('sol_turmas == 1')
+     .query('sol_turmas')
      .assign(qtd_max_alunos=info['qtd_max_alunos'],
              qtd_professores_acd=info['qtd_professores_acd'],
              qtd_professores_pedagogico=info['qtd_professores_pedagogico'],
              aprova=None)
+     # TODO: aprovação automática de turmas já existentes
      .drop(['v_turma', 'sol_turmas'], axis=1)
      .rename(columns={'id': 'id_turma'})
      .to_sql("sol_turma", cnx, if_exists='replace', index=False))
@@ -198,11 +196,11 @@ def get_kpis(cnx: sqlite3.Connection, alunos: pd.DataFrame, turmas: pd.DataFrame
 
     kpis = {}  # noqa
 
-    kpis['qtd_alunos_alocados'] = alunos.query('sol_alunos == 1')['id'].count()
-    kpis['qtd_alunos_continuam'] = alunos.query('(sol_alunos == 1) & (cluster != 0)')['id'].count()
+    kpis['qtd_alunos_alocados'] = alunos.query('sol_alunos')['id'].count()
+    kpis['qtd_alunos_continuam'] = alunos.query('(sol_alunos) & (~ formulario)')['id'].count()
     kpis['qtd_alunos_formulario'] = kpis['qtd_alunos_alocados'] - kpis['qtd_alunos_continuam']
 
-    kpis['qtd_turmas_abertas'] = turmas.query('sol_turmas == 1')['id'].count()
+    kpis['qtd_turmas_abertas'] = turmas.query('sol_turmas')['id'].count()
     kpis['qtd_vagas_remanescentes'] = kpis['qtd_turmas_abertas'] * info['qtd_max_alunos'] - kpis['qtd_alunos_alocados']
 
     kpis['custo_alunos'] = kpis['qtd_alunos_alocados'] * info['custo_aluno']
@@ -219,8 +217,6 @@ def truncate_tables(cnx: sqlite3.Connection):
 
     :param cnx: conexão com o banco de dados
     """
-
-    print("Não há solução!")
 
     cnx.execute("DELETE FROM sol_aluno")
     cnx.execute("DELETE FROM sol_priorizacao_formulario")
