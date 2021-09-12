@@ -45,17 +45,19 @@ def get_alunos(cnx: sqlite3.Connection, info: dict) -> pd.DataFrame:
                                    (1 - info['otimiza_dentro_do_ano']))
 
     formulario['data_inscricao'] = pd.to_datetime(formulario['data_inscricao'].values, dayfirst=True)
+    formulario['peso_inscricao'] = (formulario['data_inscricao'].rank(method='dense', ascending=False) /
+                                    len(formulario))
 
     # Informação para manter alunos de mesma turma agrupados
     matriculados.rename(columns={"turma_id": "cluster"}, inplace=True)
+    matriculados['peso_inscricao'] = 1
     formulario['cluster'] = 0  # cluster 0, portanto, identifica alunos de formulário
 
-    # Ordenando prioridades do formulário por data de inscrição
-    formulario = (formulario
-                  .query('cluster == 0')
-                  .sort_values('data_inscricao')
-                  .assign(inscricao_anterior=lambda df: df['id'].shift(1))
-                  .fillna(0).astype({'inscricao_anterior': int}))
+    # formulario = (formulario
+    #               .query('cluster == 0')
+    #               .sort_values('data_inscricao')
+    #               .assign(inscricao_anterior=lambda df: df['id'].shift(1))
+    #               .fillna(0).astype({'inscricao_anterior': int}))
 
     # Higienizando tabelas
     matriculados.drop(['id_turma', 'reprova', 'continua', 'serie_id'], axis=1, inplace=True)
@@ -122,6 +124,7 @@ def get_turmas(cnx: sqlite3.Connection, alunos: pd.DataFrame, info: dict) -> pd.
 
     # Caso contrário, seguir com o atual
     else:
+        # TODO: pré-processamento para sempre abrir turmas suficientes para alunos já matriculados
         turmas = pd.read_sql("SELECT id, escola_id, serie_id FROM turma", cnx)
 
     return turmas
@@ -183,6 +186,33 @@ def sol_turma(cnx: sqlite3.Connection, turmas: pd.DataFrame, info: dict):
      .to_sql("sol_turma", cnx, if_exists='replace', index=False))
 
 
+def get_kpis(cnx: sqlite3.Connection, alunos: pd.DataFrame, turmas: pd.DataFrame, info: dict):
+    """
+    Exporta os indicadores da solução obtida.
+
+    :param cnx: conexão com o banco de dados
+    :param alunos: alunos cadastrados no sistema
+    :param turmas: oferta vigente de turmas
+    :param info: decisões globais do modelo.
+    """
+
+    kpis = {}  # noqa
+
+    kpis['qtd_alunos_alocados'] = alunos.query('sol_alunos == 1')['id'].count()
+    kpis['qtd_alunos_continuam'] = alunos.query('(sol_alunos == 1) & (cluster != 0)')['id'].count()
+    kpis['qtd_alunos_formulario'] = kpis['qtd_alunos_alocados'] - kpis['qtd_alunos_continuam']
+
+    kpis['qtd_turmas_abertas'] = turmas.query('sol_turmas == 1')['id'].count()
+    kpis['qtd_vagas_remanescentes'] = kpis['qtd_turmas_abertas'] * info['qtd_max_alunos'] - kpis['qtd_alunos_alocados']
+
+    kpis['custo_alunos'] = kpis['qtd_alunos_alocados'] * info['custo_aluno']
+    kpis['custo_professores'] = ((info['qtd_professores_pedagogico'] + info['qtd_professores_acd'])
+                                 * info['custo_professor'] * kpis['qtd_turmas_abertas'])
+    kpis['custo_total'] = kpis['custo_alunos'] + kpis['custo_professores']
+
+    pd.Series(kpis).to_frame('valor').to_sql("indicadores", cnx, if_exists='replace')
+
+
 def truncate_tables(cnx: sqlite3.Connection):
     """
     Limpa as tabelas do banco de dados.
@@ -195,5 +225,6 @@ def truncate_tables(cnx: sqlite3.Connection):
     cnx.execute("DELETE FROM sol_aluno")
     cnx.execute("DELETE FROM sol_priorizacao_formulario")
     cnx.execute("DELETE FROM sol_turma")
+    cnx.execute("DELETE FROM indicadores")
 
     cnx.commit()

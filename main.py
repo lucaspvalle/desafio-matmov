@@ -21,7 +21,6 @@ def main():
     c_agrupa_colegas(alunos)
     c_abertura_de_turmas(alunos)
     c_maximo_de_alunos_por_turma(info, alunos)
-    c_prioriza_ordem_de_inscricao(alunos)
     c_custos(info, alunos, turmas)
 
     # 3) Função Objetivo
@@ -34,6 +33,8 @@ def main():
         integracao.sol_aluno(cnx, alunos)
         integracao.sol_priorizacao_formulario(cnx, alunos)
         integracao.sol_turma(cnx, turmas, info)
+
+        integracao.get_kpis(cnx, alunos, turmas, info)
     else:
         integracao.truncate_tables(cnx)
 
