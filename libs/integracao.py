@@ -178,7 +178,8 @@ def sol_turma(cnx: sqlite3.Connection, turmas: pd.DataFrame, info: dict):
              qtd_professores_acd=info['qtd_professores_acd'],
              qtd_professores_pedagogico=info['qtd_professores_pedagogico'],
              aprova=None)
-     .drop(['id', 'v_turma', 'sol_turmas'], axis=1)
+     .drop(['v_turma', 'sol_turmas'], axis=1)
+     .rename(columns={'id': 'id_turma'})
      .to_sql("sol_turma", cnx, if_exists='replace', index=False))
 
 
