@@ -138,7 +138,7 @@ def sol_aluno(cnx: sqlite3.Connection, alunos: pd.DataFrame):
     info_alunos = pd.read_sql("SELECT * FROM aluno", cnx)
 
     (info_alunos
-     .merge(alunos.query('(cluster > 0) & (sol_alunos == 1)')[['id', 'id_turma']], on='id', how='left')
+     .merge(alunos.query('(cluster > 0) & (sol_alunos == 1)')[['id', 'id_turma']], on='id', how='inner')
      .drop(['turma_id', 'reprova', 'continua'], axis=1)
      .to_sql("sol_aluno", cnx, if_exists='replace', index=False))
 
@@ -156,7 +156,7 @@ def sol_priorizacao_formulario(cnx: sqlite3.Connection, alunos: pd.DataFrame):
 
     (info_alunos
      .merge(alunos.query('(cluster == 0) & (sol_alunos == 1)')[['id', 'id_turma', 'serie_id']], on='id',
-            suffixes=['_antigo', ''], how='left')
+            suffixes=['_antigo', ''], how='inner')
      .assign(status_id=None)
      .sort_values('data_inscricao')
      .drop(['data_inscricao', 'ano_referencia', 'serie_id_antigo'], axis=1)

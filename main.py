@@ -25,7 +25,7 @@ def main():
     c_custos(info, alunos, turmas)
 
     # 3) Função Objetivo
-    funcao_objetivo(info, alunos)
+    funcao_objetivo(info, alunos, turmas)
 
     # 4) Execução
     factivel, alunos, turmas = otimiza(alunos, turmas)

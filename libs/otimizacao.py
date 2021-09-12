@@ -158,21 +158,18 @@ def c_custos(info: dict, alunos: pd.DataFrame, turmas: pd.DataFrame):
                info['limite_custo'], f"limite_custos")
 
 
-def funcao_objetivo(info: dict, alunos: pd.DataFrame):
+def funcao_objetivo(info: dict, alunos: pd.DataFrame, turmas: pd.DataFrame):
     """
-    Função Objetivo: maximizar a quantidade de alunos assistidos, com a maior ocupação possível de turmas
+    Função Objetivo: maximizar a quantidade de alunos assistidos com a maior ocupação possível de turmas
 
-    max SUM((ALUNO, TURMA), v_alunos(ALUNO, TURMA)) -
-        SUM(TURMA, qtd_max_alunos * v_turmas(TURMA) - SUM(ALUNO, v_alunos(ALUNO, TURMA)))
+    max SUM((ALUNO, TURMA), v_alunos(ALUNO, TURMA)) - SUM(TURMA, 0.75 * qtd_max_alunos * v_turmas(TURMA)))
 
     :param info: máximo de alunos definido pelo usuário
     :param alunos: alunos cadastrados no sistema
+    :param turmas: oferta vigente de turmas
     """
-    turmas_vazias = (alunos
-                     .groupby('id_turma')
-                     .apply(lambda df: info['qtd_max_alunos'] * df.iloc[0]['v_turma'] - solver.Sum(df['v_aluno'])))
 
-    solver.Maximize(solver.Sum(alunos['v_aluno']) - solver.Sum(turmas_vazias))
+    solver.Maximize(solver.Sum(alunos['v_aluno']) - 0.75 * info['qtd_max_alunos'] * solver.Sum(turmas['v_turma']))
 
 
 def otimiza(alunos: pd.DataFrame, turmas: pd.DataFrame) -> (bool, pd.DataFrame, pd.DataFrame):
