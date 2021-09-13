@@ -85,26 +85,11 @@ def c_agrupa_colegas(alunos: pd.DataFrame):
      .apply(lambda r: solver.Add(r['v_cluster'] <= big_M * r['v_aluno'], f"mantem_junto_{r.id}_{r.id_turma}"), axis=1))
 
 
-def c_abertura_de_turmas(alunos: pd.DataFrame):
-    """
-    A turma deve receber alunos apenas se o modelo decidir abri-la.
-
-    SUM(ALUNO, v_alunos(ALUNO, TURMA)) <= M * v_turma(TURMA)
-
-    :param alunos: alunos cadastrados no sistema
-    """
-
-    (alunos
-     .groupby('id_turma')
-     .apply(lambda r: solver.Add(r['v_aluno'].values.sum() <= big_M * r.iloc[0]['v_turma'],
-                                 f"abre_{r.iloc[0].id_turma}")))
-
-
 def c_maximo_de_alunos_por_turma(info: dict, alunos: pd.DataFrame):
     """
-    Define a quantidade máxima de alunos por turma.
+    Define a quantidade máxima de alunos por turma, se aberta.
 
-    SUM(ALUNO, v_alunos(ALUNO, TURMA)) <= qtd_max_alunos(TURMA)
+    SUM(ALUNO, v_alunos(ALUNO, TURMA)) <= qtd_max_alunos(TURMA) * v_turma(TURMA)
 
     :param info: máximo de alunos definido pelo usuário
     :param alunos: alunos cadastrados no sistema
@@ -112,7 +97,7 @@ def c_maximo_de_alunos_por_turma(info: dict, alunos: pd.DataFrame):
 
     (alunos
      .groupby('id_turma')
-     .apply(lambda r: solver.Add(r['v_aluno'].values.sum() <= info['qtd_max_alunos'],
+     .apply(lambda r: solver.Add(r['v_aluno'].values.sum() <= info['qtd_max_alunos'] * r.iloc[0]['v_turma'],
                                  f"max_alunos_{r.iloc[0].id_turma}")))
 
 

@@ -1,6 +1,5 @@
 import sqlite3
-from libs import integracao
-from libs.otimizacao import *
+from libs import integracao, otimizacao
 
 
 def main():
@@ -12,22 +11,21 @@ def main():
     turmas = integracao.get_turmas(cnx, alunos, info)
 
     # 1) Variáveis de decisão
-    turmas = v_turmas(turmas)
-    alunos = v_alunos(alunos, turmas)
+    turmas = otimizacao.v_turmas(turmas)
+    alunos = otimizacao.v_alunos(alunos, turmas)
 
     # 2) Restrições
-    c_alunos_matriculados(alunos)
-    c_alunos_de_formulario(alunos)
-    c_agrupa_colegas(alunos)
-    c_abertura_de_turmas(alunos)
-    c_maximo_de_alunos_por_turma(info, alunos)
-    c_custos(info, alunos, turmas)
+    otimizacao.c_alunos_matriculados(alunos)
+    otimizacao.c_alunos_de_formulario(alunos)
+    otimizacao.c_agrupa_colegas(alunos)
+    otimizacao.c_maximo_de_alunos_por_turma(info, alunos)
+    otimizacao.c_custos(info, alunos, turmas)
 
     # 3) Função Objetivo
-    funcao_objetivo(info, alunos, turmas)
+    otimizacao.funcao_objetivo(info, alunos, turmas)
 
     # 4) Execução
-    factivel, alunos, turmas = otimiza(alunos, turmas)
+    factivel, alunos, turmas = otimizacao.otimiza(alunos, turmas)
 
     if factivel:
         integracao.sol_aluno(cnx, alunos)
