@@ -115,6 +115,7 @@ class Integrador:
         """
         Exporta os resultados de turmas abertas do modelo.
 
+        :param alunos: alunos cadastrados no sistema
         :param turmas: oferta vigente de turmas
         """
 
@@ -143,6 +144,13 @@ class Integrador:
         self.cnx.commit()
 
     def get_relatorio_final(self, alunos, turmas):
+        """
+        Consolida os resultados da otimização no sistema
+
+        :param alunos: alunos cadastrados no sistema
+        :param turmas: oferta vigente de turmas
+        """
+
         self.sol_aluno(alunos)
         self.sol_priorizacao_formulario(alunos)
         self.sol_turma(alunos, turmas)
