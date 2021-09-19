@@ -1,226 +1,150 @@
-from numpy import ceil
 import pandas as pd
 import sqlite3
 
 
-def get_parametros(cnx: sqlite3.Connection) -> dict:
-    """
-    Parâmetros definidos pelo usuário.
+class Integrador:
 
-    :param cnx: conexão com o banco de dados
-    :return: parâmetros
-    """
+    def __init__(self, quem: str):
+        self.cnx = sqlite3.connect(quem)
+        self.info = self.get_parametros()
 
-    parametros = pd.read_sql("SELECT chave, valor FROM parametro", cnx)
-    return dict(zip(parametros['chave'], parametros['valor'].astype(int)))
+        # Limpa a escrita de execuções anteriores
+        for view in ['base_alunos', 'indicadores']:
+            self.cnx.execute(f"DROP VIEW IF EXISTS {view}")
 
+        for tabela in ['sol_aluno', 'sol_priorizacao_formulario', 'sol_turma']:
+            self.cnx.execute(f"DELETE FROM {tabela}")
 
-def get_alunos(cnx: sqlite3.Connection, info: dict) -> pd.DataFrame:
-    """
-    Importa tabela de alunos do banco de dados.
+        self.cnx.commit()
 
-    :param cnx: conexão com o banco de dados
-    :param info: decisões globais do modelo de otimização
-    :return: alunos cadastrados no sistema
-    """
+    def __del__(self):
+        self.cnx.close()
 
-    # Importação de dados do SQL
-    matriculados = pd.read_sql("SELECT id, turma_id, reprova, continua FROM aluno", cnx)
-    formulario = pd.read_sql("SELECT id, escola_id, serie_id, data_inscricao, ano_referencia "
-                             "FROM formulario_inscricao", cnx)
-    serie = pd.read_sql("SELECT id, ativa FROM serie", cnx)
-    turma = pd.read_sql("SELECT id, escola_id, serie_id FROM turma", cnx)
+    def get_alunos(self) -> pd.DataFrame:
+        """
+        Importa tabela de alunos do banco de dados.
 
-    # Filtrando alunos que continuam na ONG e mesclando com as turmas de seu perfil
-    matriculados = (matriculados
-                    .query('continua == 1')
-                    .merge(turma, left_on='turma_id', right_on='id', suffixes=['', '_turma']))
+        :return: alunos cadastrados no sistema
+        """
 
-    # Calculando nova série dos alunos (em caso de otimização para o próximo ano letivo)
-    matriculados['nova_serie_id'] = (matriculados['serie_id'].values + (1 - matriculados['reprova'].values) *
-                                     (1 - info['otimiza_dentro_do_ano']))
+        with open('sql/alunos.sql') as file:
+            query = file.read().format(ano_planejamento=self.info['ano_planejamento'],
+                                       otimiza_dentro_do_ano=self.info['otimiza_dentro_do_ano'])
+            self.cnx.execute(query)
+            self.cnx.commit()
 
-    formulario['nova_serie_id'] = (formulario['serie_id'].values +
-                                   (info['ano_planejamento'] - formulario['ano_referencia'].values) *
-                                   (1 - info['otimiza_dentro_do_ano']))
+        alunos = pd.read_sql("SELECT * FROM base_alunos", self.cnx)
 
-    formulario['data_inscricao'] = pd.to_datetime(formulario['data_inscricao'].values, dayfirst=True)
-    formulario['peso_inscricao'] = (formulario['data_inscricao'].rank(method='dense', ascending=False) /
-                                    len(formulario))
-    matriculados['peso_inscricao'] = 1
+        # Convertendo coluna em booleana
+        alunos['formulario'] = alunos['formulario'] == 1
 
-    # Informação para manter alunos de mesma turma agrupados
-    matriculados.rename(columns={"turma_id": "cluster"}, inplace=True)
-    formulario['cluster'] = 0
+        # Priorizando a ordem de inscrição do formulário
+        alunos['data_inscricao'] = (pd.to_datetime(alunos['data_inscricao'].values, dayfirst=True))
 
-    formulario['formulario'] = True
-    matriculados['formulario'] = False
+        tamanho_formulario = len(alunos.query('formulario'))
 
-    # Higienizando tabelas
-    matriculados.drop(['id_turma', 'reprova', 'continua', 'serie_id'], axis=1, inplace=True)
-    formulario.drop(['serie_id', 'ano_referencia', 'data_inscricao'], axis=1, inplace=True)
+        alunos.loc[alunos['formulario'], 'peso_inscricao'] = \
+            (alunos['data_inscricao'].rank(method='dense', ascending=False) / tamanho_formulario)
 
-    # Juntando base de alunos
-    alunos = pd.concat([matriculados, formulario])
+        return alunos
 
-    # Tratando base de alunos concatenada apenas para séries ativas pela ONG
-    alunos = (alunos
-              .merge(serie, left_on='nova_serie_id', right_on='id', suffixes=['', '_serie'])
-              .query('ativa == 1')
-              .drop(['id_serie', 'ativa'], axis=1))
+    def get_parametros(self) -> dict:
+        """
+        Parâmetros definidos pelo usuário.
 
-    return alunos
+        :return: parâmetros
+        """
 
+        parametros = pd.read_sql("SELECT chave, valor FROM parametro", self.cnx)
+        return dict(zip(parametros['chave'], parametros['valor'].astype(int)))
 
-def get_turmas(cnx: sqlite3.Connection, alunos: pd.DataFrame, info: dict) -> pd.DataFrame:
-    """
-    Importa tabela de turmas do banco de dados.
+    def get_turmas(self) -> pd.DataFrame:
+        """
+        Importa tabela de turmas do banco de dados.
 
-    :param cnx: conexão com o banco de dados
-    :param alunos: alunos cadastrados no sistema
-    :param info: decisões globais do modelo de otimização
-    :return: oferta vigente de turmas
-    """
+        :return: oferta vigente de turmas
+        """
 
-    # Se a ONG optar por abrir novas turmas,
-    if info['possibilita_abertura_novas_turmas']:
+        with open('sql/turmas.sql') as file:
+            query = file.read().format(qtd_max_alunos=self.info['qtd_max_alunos'],
+                                       qtd_professores_acd=self.info['qtd_professores_acd'],
+                                       qtd_professores_pedagogico=self.info['qtd_professores_pedagogico'],
+                                       possibilita_abertura_novas_turmas=self.info['possibilita_abertura_novas_turmas'])
+
+        turmas = pd.read_sql(query, self.cnx)
 
         # Dicionário para auxiliar a nomenclatura de turmas
         aux = {1: "A", 2: "B", 3: "C", 4: "D"}
 
-        # Informações auxiliares para definir a nomenclatura de turmas
-        regiao = pd.read_sql("SELECT * FROM regiao", cnx)
-        serie = pd.read_sql("SELECT id, nome FROM serie", cnx)
-        escola = pd.read_sql("SELECT * FROM escola", cnx)
+        turmas['salas'] = turmas.apply(lambda r: list(range(1, r['salas'] + 1)), axis=1)
+        turmas = turmas.explode('salas', ignore_index=True)
 
-        # Calcular a demanda por escola e série
-        demanda = (alunos
-                   .groupby(['escola_id', 'nova_serie_id'])
-                   .agg({'id': 'count'})
-                   .query(f'id >= {info["min_aluno_por_turma"]}'))
+        turmas['nome'] = turmas['nome'] + turmas['salas'].map(aux)
+        turmas['turma_id'] = turmas.index + 1
 
-        # Calcular a demanda de turmas por escola e série
-        demanda['sala'] = (demanda
-                           .assign(quebra=ceil(demanda['id'].values / info['qtd_max_alunos']))
-                           .astype({'quebra': int})
-                           .apply(lambda r: list(range(1, r['quebra'] + 1)), axis=1))
+        turmas = turmas.drop(['salas'], axis=1)
 
-        # Abrindo a quantidade necessária de salas para atender a demanda
-        demanda = demanda.explode('sala').reset_index()
+        return turmas
 
-        # Nomeando novas turmas
-        demanda['nome'] = (demanda
-                           .merge(escola, left_on='escola_id', right_on='id', suffixes=['', '_escola'])
-                           .merge(serie, left_on='nova_serie_id', right_on='id', suffixes=['', '_serie'])
-                           .merge(regiao, left_on='regiao_id', right_on='id', suffixes=['', '_regiao'])
-                           .astype({'sala': int})
-                           .apply(lambda r: r['nome_regiao'] + "_" + r['nome_serie'][0] + aux[r['sala']], axis=1))
+    def sol_aluno(self, alunos: pd.DataFrame):
+        """
+        Exporta os resultados de alunos alocados do modelo, que já participavam de turmas da ONG.
 
-        # Padronizando a tabela final
-        turmas = demanda.drop(columns='sala').rename(columns={'nova_serie_id': 'serie_id'}).assign(id=demanda.index + 1)
+        :param alunos: alunos cadastrados no sistema
+        """
+        colunas = ['id', 'cpf', 'nome', 'email_aluno', 'telefone_aluno', 'nome_responsavel', 'telefone_responsavel',
+                   'nome_escola_origem', 'turma_id']
 
-    # Caso contrário, seguir com o atual
-    else:
-        # TODO: pré-processamento para sempre abrir turmas suficientes para alunos já matriculados
-        turmas = pd.read_sql("SELECT id, escola_id, serie_id FROM turma", cnx)
+        alunos.query('(~ formulario) & (sol_alunos)')[colunas].to_sql("sol_aluno", self.cnx, if_exists='replace',
+                                                                      index=False)
 
-    return turmas
+    def sol_priorizacao_formulario(self, alunos: pd.DataFrame):
+        """
+        Exporta os resultados de alunos alocados do modelo, que estavam na lista de espera da ONG.
 
+        :param alunos: alunos cadastrados no sistema
+        """
 
-def sol_aluno(cnx: sqlite3.Connection, alunos: pd.DataFrame):
-    """
-    Exporta os resultados de alunos alocados do modelo, que já participavam de turmas da ONG.
+        colunas = ['id', 'cpf', 'nome', 'email_aluno', 'telefone_aluno', 'nome_responsavel', 'telefone_responsavel',
+                   'nome_escola_origem', 'turma_id', 'status_id']
 
-    :param cnx: conexão com o banco de dados
-    :param alunos: alunos cadastrados no sistema
-    """
+        (alunos.query('(formulario) & (sol_alunos)').assign(status_id=None)[colunas]
+         .to_sql("sol_priorizacao_formulario", self.cnx, if_exists='replace', index=False))
 
-    info_alunos = pd.read_sql("SELECT * FROM aluno", cnx)
+    def sol_turma(self, alunos: pd.DataFrame, turmas: pd.DataFrame):
+        """
+        Exporta os resultados de turmas abertas do modelo.
 
-    (info_alunos
-     .merge(alunos.query('(~ formulario) & (sol_alunos)')[['id', 'id_turma']], on='id', how='inner')
-     .drop(['turma_id', 'reprova', 'continua'], axis=1)
-     .to_sql("sol_aluno", cnx, if_exists='replace', index=False))
+        :param turmas: oferta vigente de turmas
+        """
 
+        colunas = ['turma_id', 'nome', 'escola_id', 'serie_id', 'qtd_alunos', 'qtd_max_alunos', 'qtd_professores_acd',
+                   'qtd_professores_pedagogico', 'aprova']
 
-def sol_priorizacao_formulario(cnx: sqlite3.Connection, alunos: pd.DataFrame):
-    """
-    Exporta os resultados de alunos alocados do modelo, que estavam na lista de espera da ONG.
+        alunos_por_turma = (alunos.query('sol_alunos').groupby('turma_id')['cpf'].count().reset_index()
+                            .rename(columns={'cpf': 'qtd_alunos'}))
 
-    :param cnx: conexão com o banco de dados
-    :param alunos: alunos cadastrados no sistema
-    """
+        (turmas.query('sol_turmas').assign(aprova=None).merge(alunos_por_turma)[colunas]
+         .to_sql("sol_turma", self.cnx, if_exists='replace', index=False))
 
-    info_alunos = pd.read_sql("SELECT * FROM formulario_inscricao", cnx)
-    info_alunos['data_inscricao'] = pd.to_datetime(info_alunos['data_inscricao'], dayfirst=True)
+    def get_kpis(self):
+        """
+        Exporta os indicadores da solução obtida.
+        """
+        custo_professor_por_turma = ((self.info['qtd_professores_acd'] + self.info['qtd_professores_pedagogico']) *
+                                     self.info['custo_professor'])
 
-    (info_alunos
-     .merge(alunos.query('(formulario) & (sol_alunos)')[['id', 'id_turma', 'serie_id']], on='id',
-            suffixes=['_antigo', ''], how='inner')
-     .assign(status_id=None)
-     .sort_values('data_inscricao')
-     .drop(['data_inscricao', 'ano_referencia', 'serie_id_antigo'], axis=1)
-     .to_sql("sol_priorizacao_formulario", cnx, if_exists='replace', index=False))
+        with open('sql/indicadores.sql') as file:
+            query = file.read().format(qtd_max_alunos=self.info['qtd_max_alunos'],
+                                       custo_aluno=self.info['custo_aluno'],
+                                       custo_professor_por_turma=custo_professor_por_turma)
 
+        self.cnx.execute(query)
+        self.cnx.commit()
 
-def sol_turma(cnx: sqlite3.Connection, turmas: pd.DataFrame, info: dict):
-    """
-    Exporta os resultados de turmas abertas do modelo.
+    def get_relatorio_final(self, alunos, turmas):
+        self.sol_aluno(alunos)
+        self.sol_priorizacao_formulario(alunos)
+        self.sol_turma(alunos, turmas)
 
-    :param cnx: conexão com o banco de dados
-    :param turmas: oferta vigente de turmas
-    :param info: decisões globais do modelo.
-    """
-
-    (turmas
-     .query('sol_turmas')
-     .assign(qtd_max_alunos=info['qtd_max_alunos'],
-             qtd_professores_acd=info['qtd_professores_acd'],
-             qtd_professores_pedagogico=info['qtd_professores_pedagogico'],
-             aprova=None)
-     # TODO: aprovação automática de turmas já existentes
-     .drop(['v_turma', 'sol_turmas'], axis=1)
-     .rename(columns={'id': 'id_turma'})
-     .to_sql("sol_turma", cnx, if_exists='replace', index=False))
-
-
-def get_kpis(cnx: sqlite3.Connection, alunos: pd.DataFrame, turmas: pd.DataFrame, info: dict):
-    """
-    Exporta os indicadores da solução obtida.
-
-    :param cnx: conexão com o banco de dados
-    :param alunos: alunos cadastrados no sistema
-    :param turmas: oferta vigente de turmas
-    :param info: decisões globais do modelo.
-    """
-
-    kpis = {}  # noqa
-
-    kpis['qtd_alunos_alocados'] = alunos.query('sol_alunos')['id'].count()
-    kpis['qtd_alunos_continuam'] = alunos.query('(sol_alunos) & (~ formulario)')['id'].count()
-    kpis['qtd_alunos_formulario'] = kpis['qtd_alunos_alocados'] - kpis['qtd_alunos_continuam']
-
-    kpis['qtd_turmas_abertas'] = turmas.query('sol_turmas')['id'].count()
-    kpis['qtd_vagas_remanescentes'] = kpis['qtd_turmas_abertas'] * info['qtd_max_alunos'] - kpis['qtd_alunos_alocados']
-
-    kpis['custo_alunos'] = kpis['qtd_alunos_alocados'] * info['custo_aluno']
-    kpis['custo_professores'] = ((info['qtd_professores_pedagogico'] + info['qtd_professores_acd'])
-                                 * info['custo_professor'] * kpis['qtd_turmas_abertas'])
-    kpis['custo_total'] = kpis['custo_alunos'] + kpis['custo_professores']
-
-    pd.Series(kpis).to_frame('valor').to_sql("indicadores", cnx, if_exists='replace')
-
-
-def truncate_tables(cnx: sqlite3.Connection):
-    """
-    Limpa as tabelas do banco de dados.
-
-    :param cnx: conexão com o banco de dados
-    """
-
-    cnx.execute("DELETE FROM sol_aluno")
-    cnx.execute("DELETE FROM sol_priorizacao_formulario")
-    cnx.execute("DELETE FROM sol_turma")
-    cnx.execute("DELETE FROM indicadores")
-
-    cnx.commit()
+        self.get_kpis()
