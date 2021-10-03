@@ -24,6 +24,7 @@ SELECT
     regiao.nome || '_' || substr(serie.nome, 1, 1) AS nome,
     escola_id,
     serie_id,
+    NULL AS aprova,
     {qtd_max_alunos} AS qtd_max_alunos,
     {qtd_professores_acd} AS qtd_professores_acd,
     {qtd_professores_pedagogico} AS qtd_professores_pedagogico,

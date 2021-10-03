@@ -93,6 +93,15 @@ class Integrador:
 
         return turmas
 
+    def _escrever_sql(self, tabela: str, df: pd.DataFrame):
+        """
+        Padroniza a formatação de escrita de tabelas em SQL.
+
+        :param tabela: tabela a ser escrita
+        :param df: DataFrame com informações para escrita
+        """
+        df.to_sql(tabela, self.cnx, if_exists='replace', index=False)
+
     def sol_aluno(self):
         """
         Exporta os resultados de alunos alocados do modelo, que já participavam de turmas da ONG.
@@ -100,7 +109,7 @@ class Integrador:
         colunas = ['id', 'cpf', 'nome', 'email_aluno', 'telefone_aluno', 'nome_responsavel', 'telefone_responsavel',
                    'nome_escola_origem', 'turma_id']
 
-        self.matriculados.query('sol_alunos')[colunas].to_sql("sol_aluno", self.cnx, if_exists='replace', index=False)
+        self._escrever_sql('sol_alunos', self.matriculados.query('sol_alunos')[colunas])
 
     def sol_priorizacao_formulario(self):
         """
@@ -110,8 +119,7 @@ class Integrador:
         colunas = ['id', 'cpf', 'nome', 'email_aluno', 'telefone_aluno', 'nome_responsavel', 'telefone_responsavel',
                    'nome_escola_origem', 'turma_id', 'status_id']
 
-        (self.formulario.query('sol_alunos').assign(status_id=None)[colunas]
-         .to_sql("sol_priorizacao_formulario", self.cnx, if_exists='replace', index=False))
+        self._escrever_sql('sol_priorizacao_formulario', self.formulario.query('sol_alunos')[colunas])
 
     def sol_turma(self):
         """
@@ -126,8 +134,7 @@ class Integrador:
 
         alunos_x_turma = alunos.groupby('turma_id')['cpf'].count().reset_index().rename(columns={'cpf': 'qtd_alunos'})
 
-        (self.turmas.query('sol_turmas').assign(aprova=None).merge(alunos_x_turma)[colunas]
-         .to_sql("sol_turma", self.cnx, if_exists='replace', index=False))
+        self._escrever_sql('sol_turmas', self.turmas.query('sol_turmas').merge(alunos_x_turma)[colunas])
 
     def get_kpis(self):
         """
@@ -136,13 +143,10 @@ class Integrador:
         custo_professor_por_turma = ((self.info['qtd_professores_acd'] + self.info['qtd_professores_pedagogico']) *
                                      self.info['custo_professor'])
 
-        with open('sql/indicadores.sql') as file:
-            query = file.read().format(qtd_max_alunos=self.info['qtd_max_alunos'],
-                                       custo_aluno=self.info['custo_aluno'],
-                                       custo_professor_por_turma=custo_professor_por_turma)
-
-        self.cnx.execute(query)
-        self.cnx.commit()
+        _ = self._ler_sql('indicadores',
+                          qtd_max_alunos=self.info['qtd_max_alunos'],
+                          custo_aluno=self.info['custo_aluno'],
+                          custo_professor_por_turma=custo_professor_por_turma)
 
     def get_resultados(self):
         """

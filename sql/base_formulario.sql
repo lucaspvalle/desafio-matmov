@@ -12,7 +12,8 @@ SELECT
     telefone_aluno,
     nome_responsavel,
     telefone_responsavel,
-    nome_escola_origem
+    nome_escola_origem,
+    NULL AS status_id
 FROM formulario_inscricao
 GROUP BY cpf)
 
