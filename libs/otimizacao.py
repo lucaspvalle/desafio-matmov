@@ -8,9 +8,9 @@ import pandas as pd
 class Otimizador(Integrador):
 
     @cronometro
-    def __init__(self, nome_do_solver: str, nome_do_banco: str):
-        self.solver = pywraplp.Solver.CreateSolver(nome_do_solver)
-        super().__init__(nome_do_banco)
+    def __init__(self, solver: str, banco: str):
+        self.solver = pywraplp.Solver.CreateSolver(solver)
+        super().__init__(banco)
 
     @cronometro
     def v_alunos(self):
@@ -20,15 +20,14 @@ class Otimizador(Integrador):
         :return: variável de decisão binária de alunos x turmas
         """
 
-        self.matriculados = self.matriculados.merge(self.turmas[['escola_id', 'serie_id', 'turma_id', 'v_turma']],
-                                                    on=['escola_id', 'serie_id'])
-        self.matriculados["v_aluno"] = self.matriculados.apply(lambda r: self.solver.BoolVar(f"{r.cod}_{r.turma_id}"),
-                                                               axis=1)
+        for idx, df in enumerate([self.matriculados, self.formulario]):
+            df = df.merge(self.turmas[['escola_id', 'serie_id', 'turma_id', 'v_turma']], on=['escola_id', 'serie_id'])
+            df['v_aluno'] = df.apply(lambda r: self.solver.BoolVar(f"{r.cod}_{r.turma_id}"), axis=1)
 
-        self.formulario = self.formulario.merge(self.turmas[['escola_id', 'serie_id', 'turma_id', 'v_turma']],
-                                                on=['escola_id', 'serie_id'])
-        self.formulario["v_aluno"] = self.formulario.apply(lambda r: self.solver.BoolVar(f"{r.cod}_{r.turma_id}"),
-                                                           axis=1)
+            if idx == 0:
+                self.matriculados = df
+            else:
+                self.formulario = df
 
     @cronometro
     def v_turmas(self):
@@ -69,16 +68,15 @@ class Otimizador(Integrador):
         """
         Alunos já matriculados na ONG, que estudavam em uma mesma turma, devem continuar juntos
 
-        v_alunos(ALUNO, TURMA) = v_alunos(COLEGA, TURMA)
+        SUM(COLEGA, v_alunos(COLEGA, TURMA)) = COUNT(COLEGA, v_alunos(COLEGA, TURMA)) * v_alunos(ALUNO, TURMA)
         """
 
-        colunas = ['cod', 'cluster', 'turma_id', 'v_turma', 'v_aluno']
-
-        (self.matriculados[colunas]
-         .merge(self.matriculados[colunas], on=['cluster', 'turma_id'], suffixes=['', '_colega'])
-         .query('cod != cod_colega')
-         .apply(lambda r: self.solver.Add(r['v_aluno'] == r['v_aluno_colega'],
-                                          f"mantem_junto_{r.cod}_{r.cod_colega}_{r.turma_id}"), axis=1))
+        (self.matriculados
+         .merge(self.matriculados, on=['cluster', 'turma_id'], suffixes=['', '_colega'])
+         .groupby(['cod', 'turma_id'])
+         .apply(lambda df: self.solver.Add(df['v_aluno_colega'].values.sum() ==
+                                           df['v_aluno_colega'].values.size * df.iloc[0]['v_aluno'],
+                                           f"mantem_junto_{df.iloc[0].cod}_{df.iloc[0].turma_id}")))
 
     @cronometro
     def c_maximo_de_alunos_por_turma(self):
@@ -88,8 +86,7 @@ class Otimizador(Integrador):
         SUM(ALUNO, v_alunos(ALUNO, TURMA)) <= qtd_max_alunos(TURMA) * v_turma(TURMA)
         """
 
-        colunas = ['v_aluno', 'v_turma', 'turma_id']
-        alunos = pd.concat([self.matriculados[colunas], self.formulario[colunas]])
+        alunos = pd.concat([self.matriculados, self.formulario])
 
         (alunos
          .groupby('turma_id')
@@ -126,9 +123,7 @@ class Otimizador(Integrador):
         """
 
         self.matriculados['peso_inscricao'] = 1
-        colunas = ['v_aluno', 'v_turma', 'serie_id', 'turma_id', 'peso_inscricao']
-
-        alunos = pd.concat([self.matriculados[colunas], self.formulario[colunas]])
+        alunos = pd.concat([self.matriculados, self.formulario])
 
         # Prioriza turmas de anos mais novos
         max_serie_id = self.turmas['serie_id'].values.max() + 1

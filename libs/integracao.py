@@ -24,6 +24,18 @@ class Integrador:
     def __del__(self):
         self.cnx.close()
 
+    def _ler_sql(self, arquivo: str, view: bool = True, **kwargs) -> pd.DataFrame:
+        with open(f'sql/{arquivo}.sql') as file:
+            query = file.read().format(**kwargs)
+
+            if view:
+                self.cnx.execute(query)
+                self.cnx.commit()
+
+                return pd.read_sql(f"SELECT * FROM {arquivo}", self.cnx)
+            else:
+                return pd.read_sql(query, self.cnx)
+
     def get_alunos(self) -> (pd.DataFrame, pd.DataFrame):
         """
         Importa tabela de alunos do banco de dados.
@@ -31,26 +43,16 @@ class Integrador:
         :return: alunos cadastrados no sistema
         """
 
-        with open('sql/matriculados.sql') as file:
-            query = file.read().format(ano_planejamento=self.info['ano_planejamento'],
-                                       otimiza_dentro_do_ano=self.info['otimiza_dentro_do_ano'])
-            self.cnx.execute(query)
-            self.cnx.commit()
+        ano = self.info['ano_planejamento']
+        dentro_do_ano = self.info['otimiza_dentro_do_ano']
 
-            matriculados = pd.read_sql("SELECT * FROM base_matriculados", self.cnx)
-
-        with open('sql/formulario.sql') as file:
-            query = file.read().format(ano_planejamento=self.info['ano_planejamento'],
-                                       otimiza_dentro_do_ano=self.info['otimiza_dentro_do_ano'])
-            self.cnx.execute(query)
-            self.cnx.commit()
-
-            formulario = pd.read_sql("SELECT * FROM base_formulario", self.cnx)
+        matriculados = self._ler_sql('base_matriculados', ano_planejamento=ano, otimiza_dentro_do_ano=dentro_do_ano)
+        formulario = self._ler_sql('base_formulario', ano_planejamento=ano, otimiza_dentro_do_ano=dentro_do_ano)
 
         # Priorizando a ordem de inscrição do formulário
         formulario['data_inscricao'] = (pd.to_datetime(formulario['data_inscricao'].values, dayfirst=True))
 
-        formulario['peso_inscricao'] =\
+        formulario['peso_inscricao'] = \
             (formulario['data_inscricao'].rank(method='dense', ascending=False) / len(formulario))
 
         return matriculados, formulario
@@ -72,13 +74,11 @@ class Integrador:
         :return: oferta vigente de turmas
         """
 
-        with open('sql/turmas.sql') as file:
-            query = file.read().format(qtd_max_alunos=self.info['qtd_max_alunos'],
-                                       qtd_professores_acd=self.info['qtd_professores_acd'],
-                                       qtd_professores_pedagogico=self.info['qtd_professores_pedagogico'],
-                                       possibilita_abertura_novas_turmas=self.info['possibilita_abertura_novas_turmas'])
-
-        turmas = pd.read_sql(query, self.cnx)
+        turmas = self._ler_sql('turmas', view=False,
+                               qtd_max_alunos=self.info['qtd_max_alunos'],
+                               qtd_professores_acd=self.info['qtd_professores_acd'],
+                               qtd_professores_pedagogico=self.info['qtd_professores_pedagogico'],
+                               possibilita_abertura_novas_turmas=self.info['possibilita_abertura_novas_turmas'])
 
         # Dicionário para auxiliar a nomenclatura de turmas
         aux = {1: "A", 2: "B", 3: "C", 4: "D"}
@@ -122,7 +122,7 @@ class Integrador:
                    'qtd_professores_pedagogico', 'aprova']
 
         alunos = pd.concat([self.matriculados.query('sol_alunos')[['cpf', 'turma_id']],
-                           self.formulario.query('sol_alunos')[['cpf', 'turma_id']]])
+                            self.formulario.query('sol_alunos')[['cpf', 'turma_id']]])
 
         alunos_x_turma = alunos.groupby('turma_id')['cpf'].count().reset_index().rename(columns={'cpf': 'qtd_alunos'})
 
