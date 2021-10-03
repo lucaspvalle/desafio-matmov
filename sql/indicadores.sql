@@ -2,10 +2,10 @@ CREATE VIEW indicadores AS
 WITH base_sol_alunos AS (
     SELECT count(1) AS qtd_alunos_matriculados FROM sol_aluno),
 
-    base_sol_formulario AS (
+base_sol_formulario AS (
     SELECT count(1) AS qtd_alunos_formulario FROM sol_priorizacao_formulario),
 
-    base_sol_alunos_agregado AS (
+base_sol_alunos_agregado AS (
     SELECT
         qtd_alunos_matriculados,
         qtd_alunos_formulario,
@@ -13,7 +13,7 @@ WITH base_sol_alunos AS (
     FROM base_sol_alunos
     JOIN base_sol_formulario),
 
-    base_sol_turmas AS (
+base_sol_turmas AS (
     SELECT count(1) AS qtd_turmas FROM sol_turma)
 
 SELECT

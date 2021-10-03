@@ -9,44 +9,51 @@ class Integrador:
         self.info = self.get_parametros()
 
         # Limpa a escrita de execuções anteriores
-        for view in ['base_alunos', 'indicadores']:
+        for view in ['base_matriculados', 'base_formulario', 'indicadores']:
             self.cnx.execute(f"DROP VIEW IF EXISTS {view}")
 
         for tabela in ['sol_aluno', 'sol_priorizacao_formulario', 'sol_turma']:
             self.cnx.execute(f"DELETE FROM {tabela}")
+
+        # Principais tabelas do modelo
+        self.matriculados, self.formulario = self.get_alunos()
+        self.turmas = self.get_turmas()
 
         self.cnx.commit()
 
     def __del__(self):
         self.cnx.close()
 
-    def get_alunos(self) -> pd.DataFrame:
+    def get_alunos(self) -> (pd.DataFrame, pd.DataFrame):
         """
         Importa tabela de alunos do banco de dados.
 
         :return: alunos cadastrados no sistema
         """
 
-        with open('sql/alunos.sql') as file:
+        with open('sql/matriculados.sql') as file:
             query = file.read().format(ano_planejamento=self.info['ano_planejamento'],
                                        otimiza_dentro_do_ano=self.info['otimiza_dentro_do_ano'])
             self.cnx.execute(query)
             self.cnx.commit()
 
-        alunos = pd.read_sql("SELECT * FROM base_alunos", self.cnx)
+            matriculados = pd.read_sql("SELECT * FROM base_matriculados", self.cnx)
 
-        # Convertendo coluna em booleana
-        alunos['formulario'] = alunos['formulario'] == 1
+        with open('sql/formulario.sql') as file:
+            query = file.read().format(ano_planejamento=self.info['ano_planejamento'],
+                                       otimiza_dentro_do_ano=self.info['otimiza_dentro_do_ano'])
+            self.cnx.execute(query)
+            self.cnx.commit()
+
+            formulario = pd.read_sql("SELECT * FROM base_formulario", self.cnx)
 
         # Priorizando a ordem de inscrição do formulário
-        alunos['data_inscricao'] = (pd.to_datetime(alunos['data_inscricao'].values, dayfirst=True))
+        formulario['data_inscricao'] = (pd.to_datetime(formulario['data_inscricao'].values, dayfirst=True))
 
-        tamanho_formulario = len(alunos.query('formulario'))
+        formulario['peso_inscricao'] =\
+            (formulario['data_inscricao'].rank(method='dense', ascending=False) / len(formulario))
 
-        alunos.loc[alunos['formulario'], 'peso_inscricao'] = \
-            (alunos['data_inscricao'].rank(method='dense', ascending=False) / tamanho_formulario)
-
-        return alunos
+        return matriculados, formulario
 
     def get_parametros(self) -> dict:
         """
@@ -86,46 +93,40 @@ class Integrador:
 
         return turmas
 
-    def sol_aluno(self, alunos: pd.DataFrame):
+    def sol_aluno(self):
         """
         Exporta os resultados de alunos alocados do modelo, que já participavam de turmas da ONG.
-
-        :param alunos: alunos cadastrados no sistema
         """
         colunas = ['id', 'cpf', 'nome', 'email_aluno', 'telefone_aluno', 'nome_responsavel', 'telefone_responsavel',
                    'nome_escola_origem', 'turma_id']
 
-        alunos.query('(~ formulario) & (sol_alunos)')[colunas].to_sql("sol_aluno", self.cnx, if_exists='replace',
-                                                                      index=False)
+        self.matriculados.query('sol_alunos')[colunas].to_sql("sol_aluno", self.cnx, if_exists='replace', index=False)
 
-    def sol_priorizacao_formulario(self, alunos: pd.DataFrame):
+    def sol_priorizacao_formulario(self):
         """
         Exporta os resultados de alunos alocados do modelo, que estavam na lista de espera da ONG.
-
-        :param alunos: alunos cadastrados no sistema
         """
 
         colunas = ['id', 'cpf', 'nome', 'email_aluno', 'telefone_aluno', 'nome_responsavel', 'telefone_responsavel',
                    'nome_escola_origem', 'turma_id', 'status_id']
 
-        (alunos.query('(formulario) & (sol_alunos)').assign(status_id=None)[colunas]
+        (self.formulario.query('sol_alunos').assign(status_id=None)[colunas]
          .to_sql("sol_priorizacao_formulario", self.cnx, if_exists='replace', index=False))
 
-    def sol_turma(self, alunos: pd.DataFrame, turmas: pd.DataFrame):
+    def sol_turma(self):
         """
         Exporta os resultados de turmas abertas do modelo.
-
-        :param alunos: alunos cadastrados no sistema
-        :param turmas: oferta vigente de turmas
         """
 
         colunas = ['turma_id', 'nome', 'escola_id', 'serie_id', 'qtd_alunos', 'qtd_max_alunos', 'qtd_professores_acd',
                    'qtd_professores_pedagogico', 'aprova']
 
-        alunos_por_turma = (alunos.query('sol_alunos').groupby('turma_id')['cpf'].count().reset_index()
-                            .rename(columns={'cpf': 'qtd_alunos'}))
+        alunos = pd.concat([self.matriculados.query('sol_alunos')[['cpf', 'turma_id']],
+                           self.formulario.query('sol_alunos')[['cpf', 'turma_id']]])
 
-        (turmas.query('sol_turmas').assign(aprova=None).merge(alunos_por_turma)[colunas]
+        alunos_x_turma = alunos.groupby('turma_id')['cpf'].count().reset_index().rename(columns={'cpf': 'qtd_alunos'})
+
+        (self.turmas.query('sol_turmas').assign(aprova=None).merge(alunos_x_turma)[colunas]
          .to_sql("sol_turma", self.cnx, if_exists='replace', index=False))
 
     def get_kpis(self):
@@ -143,16 +144,13 @@ class Integrador:
         self.cnx.execute(query)
         self.cnx.commit()
 
-    def get_relatorio_final(self, alunos, turmas):
+    def get_resultados(self):
         """
         Consolida os resultados da otimização no sistema
-
-        :param alunos: alunos cadastrados no sistema
-        :param turmas: oferta vigente de turmas
         """
 
-        self.sol_aluno(alunos)
-        self.sol_priorizacao_formulario(alunos)
-        self.sol_turma(alunos, turmas)
+        self.sol_aluno()
+        self.sol_priorizacao_formulario()
+        self.sol_turma()
 
         self.get_kpis()

@@ -1,22 +1,12 @@
-from libs import integracao, otimizacao
+from libs.otimizacao import Otimizador
+from libs.tempo import cronometro
 
 
+@cronometro
 def main():
 
-    # Objetos de interação com o sistema
-    integra = integracao.Integrador("data.db")
-    resolvedor = otimizacao.Otimizador("CBC", integra.info)
-
-    # Importação de dados
-    alunos = integra.get_alunos()
-    turmas = integra.get_turmas()
-
-    # Execução
-    factivel, alunos, turmas = resolvedor.otimiza(alunos, turmas)
-
-    # Exportação de dados
-    if factivel:
-        integra.get_relatorio_final(alunos, turmas)
+    print("Iniciando a execução!")
+    Otimizador(nome_do_solver="CBC", nome_do_banco="data.db").otimiza()
 
 
 if __name__ == "__main__":

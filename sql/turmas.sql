@@ -6,13 +6,18 @@ WITH turmas_atuais AS (
         count(1) * {qtd_max_alunos} AS capacidade
     FROM turma GROUP BY turma_id),
 
+alunos_x_escola_x_serie AS (
+    SELECT escola_id, serie_id FROM base_matriculados
+        UNION ALL
+    SELECT escola_id, serie_id FROM base_formulario
+        WHERE serie_id <= 100 * {possibilita_abertura_novas_turmas}),
+
 demanda_atual AS (
     SELECT
         escola_id,
         serie_id,
         count(1) AS demanda
-    FROM base_alunos
-    WHERE formulario <= {possibilita_abertura_novas_turmas}
+    FROM alunos_x_escola_x_serie
     GROUP BY escola_id, serie_id)
 
 SELECT
@@ -23,8 +28,6 @@ SELECT
     {qtd_professores_acd} AS qtd_professores_acd,
     {qtd_professores_pedagogico} AS qtd_professores_pedagogico,
     COALESCE(demanda / capacidade, 1) + 1 AS salas
-    --CASE WHEN turmas_atuais.quantidade > 0 THEN 1 ELSE 0 END AS aprova,
-    --CASE WHEN COALESCE(demanda / capacidade, 1) + 1 > turmas_atuais.quantidade THEN 1 ELSE 0 END nao_aprova_todas
 FROM demanda_atual
 LEFT JOIN turmas_atuais USING (escola_id, serie_id)
 LEFT JOIN escola USING (escola_id)
